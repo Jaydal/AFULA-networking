@@ -5,12 +5,41 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
+bool testMode = false;
+
+// Networking
 const char *ssid = "PLDTHOMEFIBRTx4z7";
 const char *password = "HindiKoAlamE1Ko!";
 const char *serverUrl = "http://192.168.1.216:3000";
+
+// fire detection
 bool fireDetected = false;
+
+// components
 int LED = D8;
-bool testMode = true;
+
+// flame sensor
+const int flameSensorMin = 0;
+const int flameSensorMax = 1024;
+
+bool validateFire()
+{
+  bool fireDetected = false;
+  int sensorReading = analogRead(A0);
+  int range = map(sensorReading, flameSensorMin, flameSensorMax, 0, 3);
+
+  switch (range)
+  {
+  case 0:
+    fireDetected = true;
+    break;
+  case 1:
+    fireDetected = true;
+    break;
+  }
+  return fireDetected;
+
+}
 
 String getImageBase64()
 {
@@ -62,23 +91,15 @@ bool predictFireFromImage()
   Serial.println(serverUrl);
 
   bool firePredicted = false;
-  String base64data = getImageBase64();
 
-  if (base64data == "")
-  {
-    return false;
-  }
-
-  // Set up HTTP client
   HTTPClient http;
   WiFiClient client;
   http.begin(client, serverUrl);
   http.addHeader("Content-Type", "application/json");
 
   // Create JSON object with Base64 image data
-  String jsonData = "{\"testMode\": " + 
-    String(testMode ? "true" : "false") + ", \"image\": \"" + 
-      base64data + "\"}";
+  String jsonData = "{\"testMode\": " +
+                    String(testMode ? "true" : "false")+"}";
 
   // Send JSON data as the request body
   int httpResponseCode = http.POST(jsonData);
@@ -135,7 +156,7 @@ void blinkLED(int freq, int ms)
 void setup()
 {
   Serial.begin(9600);
-  pinMode(LED,OUTPUT);
+  pinMode(LED, OUTPUT);
   delay(1000);
   Serial.begin(115200);
   Serial.println();
@@ -164,19 +185,55 @@ void setup()
 
 void loop()
 {
-  blinkLED(3,2000);
-  fireDetected= predictFireFromImage();
-  Serial.println("Prediction: ");
-  Serial.print("Fire exists, ");
-  Serial.println( fireDetected ? "true" : "false");
 
-  if(fireDetected){
-    blinkLED(20,100);
-    //try get distance
+  if (fireDetected)
+  {
+    Serial.println("Fire Warning!!!");
+    blinkLED(20, 100);
+
+    //DRIVE MODULE
+
+    //Start flame detection
+    Serial.println("Validating");
+
+    int ctr = 0;
+    int resetTimer = 100000;
+    int timer = 0;
+
+    do {
+      timer++;
+      ctr+=validateFire()?1:0;
+      delay(1);
+      if(timer>=resetTimer){
+        Serial.println("Sensor did not detect any flames!");
+        break;
+      }
+    }
+    while (ctr<=3);
+
+    if(ctr>=3){
+        //FIRE VALIDATED
+        //gsm module
+        // trigger extiguisher
+        Serial.println("Fire Confirmed!!!");
+        blinkLED(100, 200);
+    }
+    else{
+        Serial.println("Fire Not Confirmed!!!");
+        blinkLED(10, 500);
+    }
+
+    fireDetected=false;//set to false to reset
   }
-
-  //delay for 30secs before initiating new request
-  delay(30000);
+  else
+  {
+    Serial.println("Starting fire detection in 5000ms");
+    delay(5000);
+    Serial.println("Starting fire detection.....");
+    blinkLED(3, 2000);
+    fireDetected = predictFireFromImage();
+    Serial.println("Prediction: ");
+    Serial.print("Fire exists, ");
+    Serial.println(fireDetected ? "true" : "false");
+  }
 }
-
-
