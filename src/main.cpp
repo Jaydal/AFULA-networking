@@ -1,28 +1,90 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <base64.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
+
+#define FORWARD 'F'
+#define BACKWARD 'B'
+#define RIGHT 'R'
+#define LEFT 'L'
+#define STOP 'S'
+#define EXTINGUISH 'E'
 
 bool testMode = false;
 
 // Networking
+IPAddress local_IP(192, 168, 1, 101);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 0, 0);
+
+const char *ssid_prod = "arduino_net";
+const char *password_prod = "arduino_net";
+const char *serverUrl_prod = "http://192.168.1.110";
+
+
 const char *ssid = "PLDTHOMEFIBRTx4z7";
 const char *password = "HindiKoAlamE1Ko!";
-const char *serverUrl = "http://192.168.1.216:3000";
+const char *serverUrl = "http://jdal.local";
+
 
 // fire detection
 bool fireDetected = false;
+bool fireExtinguishing = false;
+int fireOccurenceIR = 0;
 
 // components
-int LED = D8;
+int GRN_LED = D8;
+int RED_LED = D7;
 
 // flame sensor
 const int flameSensorMin = 0;
 const int flameSensorMax = 1024;
 
-bool validateFire()
+void initWifi()
+{
+  if(!WiFi.config(local_IP, gateway, subnet)) {
+    Serial.println("STA Failed to configure");
+  }
+
+  delay(500);
+  WiFi.begin(ssid_prod, password_prod);
+  delay(500);
+
+  Serial.print("Connecting");
+  int wifiConnectionCounter = 0;
+
+  while (WiFi.status() != WL_CONNECTED && wifiConnectionCounter <= 30)
+  {
+    delay(500);
+    Serial.print(".");
+    wifiConnectionCounter++;
+  }
+  Serial.println();
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    WiFi.begin(ssid, password);
+    Serial.print("Failed to connect to primary WIFI, connecting using fallback credentials.");
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      delay(500);
+      Serial.print(".");
+    }
+  }
+
+  Serial.println();
+  Serial.print("Connected, IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void sendMotorCommand(char command) {
+    Wire.beginTransmission(9);
+    Wire.write(command);
+    Wire.endTransmission();
+    delay(1);
+}
+
+bool validateFirewithIR()
 {
   bool fireDetected = false;
   int sensorReading = analogRead(A0);
@@ -41,70 +103,42 @@ bool validateFire()
 
 }
 
-String getImageBase64()
-{
-  File imageFile = LittleFS.open("/blank.png", "r");
-  if (!imageFile)
-  {
-    Serial.println("Failed to open file for reading");
-    return "";
-  }
-
-  // Get the file size
-  size_t fileSize = imageFile.size();
-
-  // Allocate a buffer to store the image
-  uint8_t *imageData = (uint8_t *)malloc(fileSize);
-  if (!imageData)
-  {
-    Serial.println("Failed to allocate memory");
-    imageFile.close();
-    return "";
-  }
-
-  // Read the image data into the buffer
-  size_t bytesRead = imageFile.read(imageData, fileSize);
-  if (bytesRead != fileSize)
-  {
-    Serial.println("Failed to read image data");
-    imageFile.close();
-    free(imageData);
-    return "";
-  }
-
-  // Close the file
-  imageFile.close();
-
-  // Encode the image data to Base64
-  String base64Image = base64::encode(imageData, fileSize);
-
-  // Free the allocated memory
-  free(imageData);
-
-  return base64Image;
-}
-
 bool predictFireFromImage()
 {
   Serial.println("Fire Prediction Started...");
   Serial.print("Server: ");
-  Serial.println(serverUrl);
+  Serial.println(serverUrl_prod);
 
   bool firePredicted = false;
 
   HTTPClient http;
   WiFiClient client;
-  http.begin(client, serverUrl);
+  http.begin(client, serverUrl_prod);
+
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK) {
+
+      Serial.println("Reconnecting using fallback server...");
+      http.end();
+
+      http.begin(client, serverUrl);
+      httpCode = http.GET();
+
+      if(httpCode != HTTP_CODE_OK){
+        http.end();
+        Serial.println("Unable to connect!");
+        return false;
+      }
+  }
+
   http.addHeader("Content-Type", "application/json");
 
-  // Create JSON object with Base64 image data
   String jsonData = "{\"testMode\": " +
                     String(testMode ? "true" : "false")+"}";
 
-  // Send JSON data as the request body
   int httpResponseCode = http.POST(jsonData);
 
-  // Check for response
   if (httpResponseCode > 0)
   {
     String response = http.getString();
@@ -114,7 +148,6 @@ bool predictFireFromImage()
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, response);
 
-    // Test if parsing succeeds.
     if (error)
     {
       Serial.print(F("deserializeJson() failed: "));
@@ -136,101 +169,117 @@ bool predictFireFromImage()
     Serial.println(httpResponseCode);
   }
 
-  // Disconnect
   http.end();
 
   return firePredicted;
 }
 
-void blinkLED(int freq, int ms)
+void blinkLED(int freq, int ms, int led = GRN_LED)
 {
   for (int i = 0; i < freq; i++)
   {
-    digitalWrite(LED, HIGH);
+    digitalWrite(led, HIGH);
     delay(ms);
-    digitalWrite(LED, LOW);
+    digitalWrite(led, LOW);
     delay(ms);
   }
+}
+
+void sendAlert(){
+  Serial.println("Alerting Authorities....");
+}
+
+void reset(){
+  digitalWrite(GRN_LED, HIGH);
+  Serial.println("Resetting....");
+  fireExtinguishing = false;
+  fireDetected = false;
+  delay(3000);
+  digitalWrite(GRN_LED, LOW);
+}
+
+void onFire()
+{
+  Serial.println();
+  Serial.println("Fire Confirmed!!!");
+  sendAlert();
+  fireExtinguishing = true;
+  sendMotorCommand(EXTINGUISH);
 }
 
 void setup()
 {
+  Wire.begin();
+
   Serial.begin(9600);
-  pinMode(LED, OUTPUT);
+  pinMode(GRN_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
   delay(1000);
   Serial.begin(115200);
   Serial.println();
 
-  delay(500);
-  WiFi.begin(ssid, password);
-  delay(500);
-
-  Serial.print("Connecting");
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-
-  Serial.print("Connected, IP address: ");
-  Serial.println(WiFi.localIP());
-
-  if (!LittleFS.begin())
-  {
-    Serial.println("An Error has occurred while mounting LittleFS");
-    return;
-  }
+  initWifi();
 }
 
 void loop()
 {
-
-  if (fireDetected)
+  if (fireDetected && !fireExtinguishing)
   {
     Serial.println("Fire Warning!!!");
     blinkLED(20, 100);
 
-    //DRIVE MODULE
-
-    //Start flame detection
     Serial.println("Validating");
 
     int ctr = 0;
-    int resetTimer = 100000;
+    int resetTimer = 30000;
     int timer = 0;
 
     do {
       timer++;
-      ctr+=validateFire()?1:0;
+      ctr+=validateFirewithIR()?1:0;
       delay(1);
       if(timer>=resetTimer){
         Serial.println("Sensor did not detect any flames!");
         break;
       }
+      sendMotorCommand(FORWARD);
     }
     while (ctr<=3);
 
     if(ctr>=3){
-        //FIRE VALIDATED
-        //gsm module
-        // trigger extiguisher
-        Serial.println("Fire Confirmed!!!");
-        blinkLED(100, 200);
+      onFire();
     }
     else{
         Serial.println("Fire Not Confirmed!!!");
         blinkLED(10, 500);
+        fireDetected=false;
     }
-
-    fireDetected=false;//set to false to reset
+  }
+  else if(fireDetected && fireExtinguishing){
+    Serial.println("WANG WANG!!");
+    blinkLED(200,100, RED_LED);
+    reset();
   }
   else
   {
-    Serial.println("Starting fire detection in 5000ms");
-    delay(5000);
-    Serial.println("Starting fire detection.....");
-    blinkLED(3, 2000);
+    blinkLED(3, 1000);
+    Serial.print("Starting fire detection in 5000ms");
+
+    int ctr = 0;
+    do{
+      Serial.print(".");
+      if (validateFirewithIR())
+      {
+        fireDetected = true;
+        onFire();
+        return;
+      }
+      ctr++;
+      delay(1);
+    } while (ctr <= 5000);
+
+    Serial.println("Starting fire detection with AI.....");
+
     fireDetected = predictFireFromImage();
     Serial.println("Prediction: ");
     Serial.print("Fire exists, ");
