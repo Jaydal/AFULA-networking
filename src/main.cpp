@@ -10,6 +10,7 @@
 #define LEFT 'L'
 #define STOP 'S'
 #define EXTINGUISH 'E'
+#define RESET 'RST'
 
 bool testMode = false;
 
@@ -22,20 +23,19 @@ const char *ssid_prod = "arduino_net";
 const char *password_prod = "arduino_net";
 const char *serverUrl_prod = "http://192.168.1.110";
 
-
 const char *ssid = "PLDTHOMEFIBRTx4z7";
 const char *password = "HindiKoAlamE1Ko!";
 const char *serverUrl = "http://jdal.local";
 
-
 // fire detection
 bool fireDetected = false;
 bool fireExtinguishing = false;
-int fireOccurenceIR = 0;
+int noFireOccurenceIR = 0;
 
 // components
 int GRN_LED = D8;
 int RED_LED = D7;
+int FLM_SENSOR = A0;
 
 // flame sensor
 const int flameSensorMin = 0;
@@ -43,7 +43,8 @@ const int flameSensorMax = 1024;
 
 void initWifi()
 {
-  if(!WiFi.config(local_IP, gateway, subnet)) {
+  if (!WiFi.config(local_IP, gateway, subnet))
+  {
     Serial.println("STA Failed to configure");
   }
 
@@ -77,17 +78,18 @@ void initWifi()
   Serial.println(WiFi.localIP());
 }
 
-void sendMotorCommand(char command) {
-    Wire.beginTransmission(9);
-    Wire.write(command);
-    Wire.endTransmission();
-    delay(1);
+void sendMotorCommand(char command)
+{
+  Wire.beginTransmission(9);
+  Wire.write(command);
+  Wire.endTransmission();
+  delay(1);
 }
 
 bool validateFirewithIR()
 {
   bool fireDetected = false;
-  int sensorReading = analogRead(A0);
+  int sensorReading = analogRead(FLM_SENSOR);
   int range = map(sensorReading, flameSensorMin, flameSensorMax, 0, 3);
 
   switch (range)
@@ -100,7 +102,6 @@ bool validateFirewithIR()
     break;
   }
   return fireDetected;
-
 }
 
 bool predictFireFromImage()
@@ -117,25 +118,27 @@ bool predictFireFromImage()
 
   int httpCode = http.GET();
 
-  if (httpCode != HTTP_CODE_OK) {
+  if (httpCode != HTTP_CODE_OK)
+  {
 
-      Serial.println("Reconnecting using fallback server...");
+    Serial.println("Reconnecting using fallback server...");
+    http.end();
+
+    http.begin(client, serverUrl);
+    httpCode = http.GET();
+
+    if (httpCode != HTTP_CODE_OK)
+    {
       http.end();
-
-      http.begin(client, serverUrl);
-      httpCode = http.GET();
-
-      if(httpCode != HTTP_CODE_OK){
-        http.end();
-        Serial.println("Unable to connect!");
-        return false;
-      }
+      Serial.println("Unable to connect!");
+      return false;
+    }
   }
 
   http.addHeader("Content-Type", "application/json");
 
   String jsonData = "{\"testMode\": " +
-                    String(testMode ? "true" : "false")+"}";
+                    String(testMode ? "true" : "false") + "}";
 
   int httpResponseCode = http.POST(jsonData);
 
@@ -185,15 +188,21 @@ void blinkLED(int freq, int ms, int led = GRN_LED)
   }
 }
 
-void sendAlert(){
+void sendAlert()
+{
   Serial.println("Alerting Authorities....");
 }
 
-void reset(){
+void reset()
+{
   digitalWrite(GRN_LED, HIGH);
   Serial.println("Resetting....");
+
+  sendMotorCommand(RESET);
   fireExtinguishing = false;
   fireDetected = false;
+  noFireOccurenceIR = 0;
+
   delay(3000);
   digitalWrite(GRN_LED, LOW);
 }
@@ -234,31 +243,42 @@ void loop()
     int resetTimer = 30000;
     int timer = 0;
 
-    do {
+    do
+    {
       timer++;
-      ctr+=validateFirewithIR()?1:0;
+      ctr += validateFirewithIR() ? 1 : 0;
       delay(1);
-      if(timer>=resetTimer){
+      if (timer >= resetTimer)
+      {
         Serial.println("Sensor did not detect any flames!");
         break;
       }
       sendMotorCommand(FORWARD);
-    }
-    while (ctr<=3);
+    } while (ctr <= 3);
 
-    if(ctr>=3){
+    if (ctr >= 3)
+    {
       onFire();
     }
-    else{
-        Serial.println("Fire Not Confirmed!!!");
-        blinkLED(10, 500);
-        fireDetected=false;
+    else
+    {
+      Serial.println("Fire Not Confirmed!!!");
+      blinkLED(10, 500);
+      fireDetected = false;
     }
   }
-  else if(fireDetected && fireExtinguishing){
+  else if (fireDetected && fireExtinguishing)
+  {
     Serial.println("WANG WANG!!");
-    blinkLED(200,100, RED_LED);
-    reset();
+    blinkLED(1, 100, RED_LED);
+    if (!validateFirewithIR())
+    {
+      if (noFireOccurenceIR > 10)
+      {
+        reset();
+      }
+      noFireOccurenceIR++;
+    }
   }
   else
   {
@@ -266,7 +286,8 @@ void loop()
     Serial.print("Starting fire detection in 5000ms");
 
     int ctr = 0;
-    do{
+    do
+    {
       Serial.print(".");
       if (validateFirewithIR())
       {
