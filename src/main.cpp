@@ -10,7 +10,7 @@
 #define LEFT 'L'
 #define STOP 'S'
 #define EXTINGUISH 'E'
-#define RESET 'RST'
+#define RESET_MOTOR 'X'
 
 bool testMode = false;
 
@@ -78,8 +78,49 @@ void initWifi()
   Serial.println(WiFi.localIP());
 }
 
+
+HTTPClient getHttpClient(String url = serverUrl_prod, String fallbackUrl = serverUrl){
+  HTTPClient http;
+  WiFiClient client;
+  http.begin(client, url);
+
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK)
+  {
+    Serial.println("Reconnecting using fallback server...");
+    http.end();
+    http.begin(client, fallbackUrl);
+  }
+
+  return http;
+}
+
+void sendLogs(String message){
+  HTTPClient http = getHttpClient(String(serverUrl_prod)+"/log",String(serverUrl)+"/log");
+  
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK)
+  {
+    Serial.println("Unable to get logs!");
+    return;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+
+  String jsonData = "{\"message\": " + message + "}";
+
+  int httpPostCode = http.POST(jsonData);
+
+  if(httpPostCode != HTTP_CODE_OK){
+    Serial.println("Unable to post logs!");
+  }
+}
+
 void sendMotorCommand(char command)
 {
+  sendLogs("INFO: Sending "+ String(command) +" command to motor driver module.");
   Wire.beginTransmission(9);
   Wire.write(command);
   Wire.endTransmission();
@@ -88,6 +129,7 @@ void sendMotorCommand(char command)
 
 bool validateFirewithIR()
 {
+  sendLogs("INFO: Detecting fire using Infrared Sensors.");
   bool fireDetected = false;
   int sensorReading = analogRead(FLM_SENSOR);
   int range = map(sensorReading, flameSensorMin, flameSensorMax, 0, 3);
@@ -106,33 +148,22 @@ bool validateFirewithIR()
 
 bool predictFireFromImage()
 {
+  sendLogs("INFO: Starting fire detection using Image Processing Service.");
   Serial.println("Fire Prediction Started...");
   Serial.print("Server: ");
   Serial.println(serverUrl_prod);
 
   bool firePredicted = false;
 
-  HTTPClient http;
-  WiFiClient client;
-  http.begin(client, serverUrl_prod);
-
+  HTTPClient http = getHttpClient();
   int httpCode = http.GET();
 
   if (httpCode != HTTP_CODE_OK)
   {
-
-    Serial.println("Reconnecting using fallback server...");
-    http.end();
-
-    http.begin(client, serverUrl);
-    httpCode = http.GET();
-
-    if (httpCode != HTTP_CODE_OK)
-    {
-      http.end();
-      Serial.println("Unable to connect!");
-      return false;
-    }
+    Serial.println("Unable to connect!");
+    sendLogs("WARN: Service is not available.");
+    sendLogs("WARN: Unable to connect.");
+    return false;
   }
 
   http.addHeader("Content-Type", "application/json");
@@ -140,6 +171,7 @@ bool predictFireFromImage()
   String jsonData = "{\"testMode\": " +
                     String(testMode ? "true" : "false") + "}";
 
+  sendLogs("INFO: Sending HTTP Request.");
   int httpResponseCode = http.POST(jsonData);
 
   if (httpResponseCode > 0)
@@ -153,6 +185,7 @@ bool predictFireFromImage()
 
     if (error)
     {
+      sendLogs("ERROR: Deserialize failed.");
       Serial.print(F("deserializeJson() failed: "));
       Serial.println(error.f_str());
       return false;
@@ -163,16 +196,21 @@ bool predictFireFromImage()
 
     Serial.println("nasnet model: " + nasnet);
     Serial.println("shufflenet model: " + shufflenet);
+    sendLogs("INFO: Fire Detection Results:");
+    sendLogs("- - - Nasnet model: " + nasnet);
+    sendLogs("- - - Shufflenet model: " + shufflenet);
 
     firePredicted = (shufflenet != "1.0" || nasnet != "1.0") ? true : false;
   }
   else
   {
+    sendLogs("ERROR: Error on HTTP request.");
     Serial.print("Error on HTTP request: ");
     Serial.println(httpResponseCode);
   }
 
   http.end();
+  sendLogs("INFO: Terminating HTTP Request.");
 
   return firePredicted;
 }
@@ -190,25 +228,29 @@ void blinkLED(int freq, int ms, int led = GRN_LED)
 
 void sendAlert()
 {
+  sendLogs("INFO: Sending alerts to local authorities.");
   Serial.println("Alerting Authorities....");
 }
 
 void reset()
 {
+  sendLogs("INFO: Executing Reset.");
   digitalWrite(GRN_LED, HIGH);
   Serial.println("Resetting....");
 
-  sendMotorCommand(RESET);
+  sendMotorCommand(RESET_MOTOR);
   fireExtinguishing = false;
   fireDetected = false;
   noFireOccurenceIR = 0;
 
   delay(3000);
   digitalWrite(GRN_LED, LOW);
+  sendLogs("INFO: Reset Completed.");
 }
 
 void onFire()
 {
+  sendLogs("INFO: Fire is confirmed.");
   Serial.println();
   Serial.println("Fire Confirmed!!!");
   sendAlert();
@@ -228,17 +270,19 @@ void setup()
   Serial.println();
 
   initWifi();
+  sendLogs("INFO: Setup Initiliazed.");
 }
 
 void loop()
 {
   if (fireDetected && !fireExtinguishing)
   {
+    sendLogs("INFO: Image Processing Server detects fire.");
     Serial.println("Fire Warning!!!");
     blinkLED(20, 100);
 
     Serial.println("Validating");
-
+    sendLogs("INFO: Initializing fire validation using Infrared Sensors.");
     int ctr = 0;
     int resetTimer = 30000;
     int timer = 0;
@@ -251,6 +295,7 @@ void loop()
       if (timer >= resetTimer)
       {
         Serial.println("Sensor did not detect any flames!");
+        sendLogs("INFO: Infrared Sensors did not detect fire.");
         break;
       }
       sendMotorCommand(FORWARD);
@@ -263,18 +308,22 @@ void loop()
     else
     {
       Serial.println("Fire Not Confirmed!!!");
+      sendLogs("INFO: Infrared Sensors were not able to detect fire.");
       blinkLED(10, 500);
       fireDetected = false;
     }
   }
   else if (fireDetected && fireExtinguishing)
   {
+    sendLogs("INFO: Fighting Fire.");
     Serial.println("WANG WANG!!");
     blinkLED(1, 100, RED_LED);
     if (!validateFirewithIR())
     {
+      sendLogs("INFO: Fire seems out.");
       if (noFireOccurenceIR > 10)
       {
+        sendLogs("INFO: Fire is out.");
         reset();
       }
       noFireOccurenceIR++;
@@ -284,6 +333,7 @@ void loop()
   {
     blinkLED(3, 1000);
     Serial.print("Starting fire detection in 5000ms");
+    sendLogs("INFO: Starting fire detection.");
 
     int ctr = 0;
     do
@@ -305,5 +355,6 @@ void loop()
     Serial.println("Prediction: ");
     Serial.print("Fire exists, ");
     Serial.println(fireDetected ? "true" : "false");
+    sendLogs("INFO: Image Processing Result: "+fireDetected ? "FIRE EXISTS" : "NO FIRE");
   }
 }
