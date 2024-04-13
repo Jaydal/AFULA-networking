@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
+#include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 
@@ -12,20 +13,35 @@
 #define EXTINGUISH 'E'
 #define RESET_MOTOR 'X'
 
-bool testMode = false;
+bool testMode = true;
+bool noLogs = true;
+bool motorOff = false;
+bool manualDriveMode = false;
+int commandTimer = 0;
+int commandResetTimer = 100;
+bool init_done = false;
+int setupCounter = 0;
 
 // Networking
+ESP8266WebServer server(80);
+
 IPAddress local_IP(192, 168, 1, 101);
 IPAddress gateway(192, 168, 1, 1);
 IPAddress subnet(255, 255, 0, 0);
 
-const char *ssid_prod = "arduino_net";
-const char *password_prod = "arduino_net";
-const char *serverUrl_prod = "http://192.168.1.110";
+// const char *ssid_prod = "arduino_net";
+// const char *password_prod = "arduino_net";
+// const char *serverUrl_prod = "http://192.168.1.110";//change to 110
 
 const char *ssid = "PLDTHOMEFIBRTx4z7";
 const char *password = "HindiKoAlamE1Ko!";
-const char *serverUrl = "http://jdal.local";
+const char *serverUrl = "http://192.168.1.216";
+
+const char *ssid_prod = "PLDTHOMEFIBRTx4z7";
+const char *password_prod = "HindiKoAlamE1Ko!";
+const char *serverUrl_prod = "http://192.168.1.216";
+
+String activeServer;
 
 // fire detection
 bool fireDetected = false;
@@ -33,7 +49,7 @@ bool fireExtinguishing = false;
 int noFireOccurenceIR = 0;
 
 // components
-int GRN_LED = D8;
+int BLU_LED = D8;
 int RED_LED = D7;
 int FLM_SENSOR = A0;
 
@@ -55,7 +71,7 @@ void initWifi()
   Serial.print("Connecting");
   int wifiConnectionCounter = 0;
 
-  while (WiFi.status() != WL_CONNECTED && wifiConnectionCounter <= 30)
+  while (WiFi.status() != WL_CONNECTED && wifiConnectionCounter <= 50)
   {
     delay(500);
     Serial.print(".");
@@ -78,7 +94,6 @@ void initWifi()
   Serial.println(WiFi.localIP());
 }
 
-
 HTTPClient getHttpClient(String url = serverUrl_prod, String fallbackUrl = serverUrl){
   HTTPClient http;
   WiFiClient client;
@@ -86,50 +101,118 @@ HTTPClient getHttpClient(String url = serverUrl_prod, String fallbackUrl = serve
 
   int httpCode = http.GET();
 
+  activeServer = url;
+
   if (httpCode != HTTP_CODE_OK)
   {
     Serial.println("Reconnecting using fallback server...");
     http.end();
     http.begin(client, fallbackUrl);
+    activeServer = fallbackUrl;
   }
 
   return http;
 }
 
-void sendLogs(String message){
-  HTTPClient http = getHttpClient(String(serverUrl_prod)+"/log",String(serverUrl)+"/log");
+void sendLogs(String message)
+{
+  if(noLogs) return;
   
-  int httpCode = http.GET();
-
-  if (httpCode != HTTP_CODE_OK)
+  HTTPClient http;
+  WiFiClient client;
+  
+  delay(1000);
+  
+  if (http.begin(client, activeServer + "/logs"))
   {
-    Serial.println("Unable to get logs!");
-    return;
+
+    http.addHeader("Content-Type", "application/json");
+
+    String jsonData = "{\"message\": \"" + message + "\"}";
+
+    int httpPostCode = http.POST(jsonData);
+
+    if (httpPostCode > 0)
+    {
+      Serial.println("Unable to send logs.");
+      // Serial.println(httpPostCode);
+      String response = http.getString();
+      // Serial.println("Server response: " + response);
+    }
+    else
+    {
+      Serial.println("Error sending HTTP POST request.");
+    }
+
+    http.end();
   }
-
-  http.addHeader("Content-Type", "application/json");
-
-  String jsonData = "{\"message\": " + message + "}";
-
-  int httpPostCode = http.POST(jsonData);
-
-  if(httpPostCode != HTTP_CODE_OK){
-    Serial.println("Unable to post logs!");
+  else
+  {
+    Serial.println("Unable to connect to server.");
   }
 }
 
 void sendMotorCommand(char command)
 {
-  sendLogs("INFO: Sending "+ String(command) +" command to motor driver module.");
+  if(motorOff){
+    return;
+  }
+  commandTimer = 0;
   Wire.beginTransmission(9);
   Wire.write(command);
   Wire.endTransmission();
   delay(1);
+  sendLogs("INFO: Sending "+ String(command) +" command to motor driver module.");
+}
+
+void handleCommand()
+{
+  String command = server.arg("command");
+  
+  manualDriveMode = (command == "manualmode_on") ? true : 
+                    (command == "manualmode_off") ? false : manualDriveMode;
+
+  testMode = (command == "testmode_on") ? true : 
+                  (command == "testmode_off") ? false : testMode;
+  
+  motorOff = (command == "motor_off") ? true : 
+                (command == "motor_on") ? false : motorOff;
+
+  if(manualDriveMode){
+    if (command == "forward")
+    {
+      sendMotorCommand(FORWARD);
+    }
+    else if (command == "backward")
+    {
+      sendMotorCommand(BACKWARD);
+    }
+    else if (command == "left")
+    {
+      sendMotorCommand(LEFT);
+    }
+    else if (command == "right")
+    {
+      sendMotorCommand(RIGHT);
+    }
+    else if (command == "stop")
+    {
+      sendMotorCommand(STOP);
+    }
+    else if (command == "extingush")
+    {
+      sendMotorCommand(EXTINGUISH);
+    }
+    else if (command == "reset")
+    {
+      sendMotorCommand(RESET_MOTOR);
+    }
+  }
+  server.send(200, "text/plain", "Command received: " + command);
 }
 
 bool validateFirewithIR()
 {
-  sendLogs("INFO: Detecting fire using Infrared Sensors.");
   bool fireDetected = false;
   int sensorReading = analogRead(FLM_SENSOR);
   int range = map(sensorReading, flameSensorMin, flameSensorMax, 0, 3);
@@ -196,9 +279,9 @@ bool predictFireFromImage()
 
     Serial.println("nasnet model: " + nasnet);
     Serial.println("shufflenet model: " + shufflenet);
-    sendLogs("INFO: Fire Detection Results:");
     sendLogs("- - - Nasnet model: " + nasnet);
     sendLogs("- - - Shufflenet model: " + shufflenet);
+    sendLogs("INFO: Fire Detection Results:");
 
     firePredicted = (shufflenet != "1.0" || nasnet != "1.0") ? true : false;
   }
@@ -207,6 +290,7 @@ bool predictFireFromImage()
     sendLogs("ERROR: Error on HTTP request.");
     Serial.print("Error on HTTP request: ");
     Serial.println(httpResponseCode);
+    firePredicted = false;
   }
 
   http.end();
@@ -215,13 +299,25 @@ bool predictFireFromImage()
   return firePredicted;
 }
 
-void blinkLED(int freq, int ms, int led = GRN_LED)
+void beep(){
+   for( int i = 0; i<500;i++){
+      digitalWrite(D9 , HIGH);
+      delayMicroseconds(500);
+      digitalWrite(D9, LOW );
+      delayMicroseconds(500);
+   }
+}
+
+void blinkLED(int freq, int ms, int led = BLU_LED, int led2 = LED_BUILTIN)
 {
   for (int i = 0; i < freq; i++)
   {
     digitalWrite(led, HIGH);
+    digitalWrite(led2, HIGH);
+    beep();
     delay(ms);
     digitalWrite(led, LOW);
+    digitalWrite(led2, LOW);
     delay(ms);
   }
 }
@@ -235,7 +331,7 @@ void sendAlert()
 void reset()
 {
   sendLogs("INFO: Executing Reset.");
-  digitalWrite(GRN_LED, HIGH);
+  digitalWrite(BLU_LED, HIGH);
   Serial.println("Resetting....");
 
   sendMotorCommand(RESET_MOTOR);
@@ -244,12 +340,13 @@ void reset()
   noFireOccurenceIR = 0;
 
   delay(3000);
-  digitalWrite(GRN_LED, LOW);
+  digitalWrite(BLU_LED, LOW);
   sendLogs("INFO: Reset Completed.");
 }
 
 void onFire()
 {
+  fireDetected = true;
   sendLogs("INFO: Fire is confirmed.");
   Serial.println();
   Serial.println("Fire Confirmed!!!");
@@ -262,33 +359,91 @@ void setup()
 {
   Wire.begin();
 
-  Serial.begin(9600);
-  pinMode(GRN_LED, OUTPUT);
+  // Serial.begin(9600);
+  pinMode(BLU_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(D9,OUTPUT);
   delay(1000);
   Serial.begin(115200);
   Serial.println();
 
   initWifi();
-  sendLogs("INFO: Setup Initiliazed.");
+  delay(2000);
+
+  server.on("/command", HTTP_POST, handleCommand);
+  server.begin();
+  Serial.println();
 }
 
 void loop()
 {
+  if(!init_done){
+    // sendLogs("INFO: Initializing.");
+    digitalWrite(BLU_LED,HIGH);
+    Serial.print("Initializing (");
+    Serial.print(setupCounter);
+    Serial.println(")");
+    server.handleClient();
+    delay(1);
+    setupCounter++;
+    
+    if(setupCounter<=10000){
+      return;
+    }
+
+    digitalWrite(BLU_LED,LOW);
+    sendLogs("INFO: Setup Initiliazed.");
+
+    if(testMode){
+      sendLogs("INFO: Test mode is on!");
+      Serial.println("Test mode is on!");
+
+    }
+    init_done = true;
+  }
+  else{
+    server.handleClient();
+  }
+
+  if(manualDriveMode){
+    commandTimer++;
+    Serial.println("Manual mode is on!");
+    digitalWrite(RED_LED,HIGH);
+    digitalWrite(BLU_LED,HIGH);
+
+    if(commandTimer>=commandResetTimer){
+        sendMotorCommand(STOP);
+    }
+    return;
+  }
+  else{
+    // Serial.println("Manual mode is off!");
+    digitalWrite(RED_LED,LOW);
+    digitalWrite(BLU_LED,LOW);
+  }
+
   if (fireDetected && !fireExtinguishing)
   {
     sendLogs("INFO: Image Processing Server detects fire.");
     Serial.println("Fire Warning!!!");
-    blinkLED(20, 100);
+    blinkLED(2, 500 ,BLU_LED,RED_LED);
 
     Serial.println("Validating");
     sendLogs("INFO: Initializing fire validation using Infrared Sensors.");
     int ctr = 0;
-    int resetTimer = 30000;
+    int resetTimer = 20000;
     int timer = 0;
+
+    digitalWrite(RED_LED,HIGH);
+    digitalWrite(BLU_LED,HIGH);
 
     do
     {
+      if(timer%500==0 || timer==0){
+        sendMotorCommand(FORWARD);
+      }
+
       timer++;
       ctr += validateFirewithIR() ? 1 : 0;
       delay(1);
@@ -298,8 +453,9 @@ void loop()
         sendLogs("INFO: Infrared Sensors did not detect fire.");
         break;
       }
-      sendMotorCommand(FORWARD);
     } while (ctr <= 3);
+
+    sendMotorCommand(STOP);
 
     if (ctr >= 3)
     {
@@ -307,9 +463,11 @@ void loop()
     }
     else
     {
+      digitalWrite(RED_LED,LOW);
+      digitalWrite(BLU_LED,LOW);
       Serial.println("Fire Not Confirmed!!!");
       sendLogs("INFO: Infrared Sensors were not able to detect fire.");
-      blinkLED(10, 500);
+      blinkLED(5, 100,BLU_LED);
       fireDetected = false;
     }
   }
@@ -317,13 +475,16 @@ void loop()
   {
     sendLogs("INFO: Fighting Fire.");
     Serial.println("WANG WANG!!");
-    blinkLED(1, 100, RED_LED);
+    blinkLED(1, 100,RED_LED,BLU_LED);
     if (!validateFirewithIR())
     {
+      Serial.println("Fire seems out");
       sendLogs("INFO: Fire seems out.");
-      if (noFireOccurenceIR > 10)
+      if (noFireOccurenceIR > 20)
       {
         sendLogs("INFO: Fire is out.");
+        Serial.println("Fire is out!");
+        blinkLED(1, 2000,BLU_LED);
         reset();
       }
       noFireOccurenceIR++;
@@ -341,13 +502,12 @@ void loop()
       Serial.print(".");
       if (validateFirewithIR())
       {
-        fireDetected = true;
         onFire();
         return;
       }
       ctr++;
-      delay(1);
-    } while (ctr <= 5000);
+      delay(100);
+    } while (ctr <= 50);
 
     Serial.println("Starting fire detection with AI.....");
 
@@ -355,6 +515,9 @@ void loop()
     Serial.println("Prediction: ");
     Serial.print("Fire exists, ");
     Serial.println(fireDetected ? "true" : "false");
-    sendLogs("INFO: Image Processing Result: "+fireDetected ? "FIRE EXISTS" : "NO FIRE");
+    String result = fireDetected ? "Fire Detected.":"No Fire Detected.";
+    String msg = "INFO: Image Processing Result: ";
+    msg+=result;
+    sendLogs(msg);
   }
 }
