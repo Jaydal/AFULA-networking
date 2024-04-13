@@ -4,6 +4,7 @@
 #include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
+#include <SoftwareSerial.h>
 
 #define FORWARD 'F'
 #define BACKWARD 'B'
@@ -13,7 +14,8 @@
 #define EXTINGUISH 'E'
 #define RESET_MOTOR 'X'
 
-bool testMode = true;
+//Settings
+bool testMode = false;
 bool noLogs = true;
 bool motorOff = false;
 bool manualDriveMode = false;
@@ -21,6 +23,10 @@ int commandTimer = 0;
 int commandResetTimer = 100;
 bool init_done = false;
 int setupCounter = 0;
+
+//GSM
+String gsmRecipient =  "+639978037903";
+SoftwareSerial gsmSerial(D5, D6);
 
 // Networking
 ESP8266WebServer server(80);
@@ -49,13 +55,36 @@ bool fireExtinguishing = false;
 int noFireOccurenceIR = 0;
 
 // components
-int BLU_LED = D8;
-int RED_LED = D7;
-int FLM_SENSOR = A0;
+const int BLU_LED = D8;
+const int RED_LED = D7;
+const int SPK_1 = D2;
+const int FLM_SENSOR = A0;
+
 
 // flame sensor
 const int flameSensorMin = 0;
 const int flameSensorMax = 1024;
+
+void initComponents()
+{
+  pinMode(BLU_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(SPK_1, OUTPUT);
+}
+
+void sendSMS(String message){
+  gsmSerial.println("AT+CMGF=1");
+  delay(1000);
+  gsmSerial.println("AT+CMGS=\""+gsmRecipient+"\"\r"); 
+  delay(1000);
+  gsmSerial.print(message);
+  delay(1000); 
+  gsmSerial.println((char)26);
+  Serial.print("Sending message: ");
+  Serial.println(message);
+  delay(1000); 
+}
 
 void initWifi()
 {
@@ -299,11 +328,11 @@ bool predictFireFromImage()
   return firePredicted;
 }
 
-void beep(){
+void beep(int spk = SPK_1){
    for( int i = 0; i<500;i++){
-      digitalWrite(D9 , HIGH);
+      digitalWrite(spk , HIGH);
       delayMicroseconds(500);
-      digitalWrite(D9, LOW );
+      digitalWrite(spk, LOW );
       delayMicroseconds(500);
    }
 }
@@ -326,10 +355,12 @@ void sendAlert()
 {
   sendLogs("INFO: Sending alerts to local authorities.");
   Serial.println("Alerting Authorities....");
+  sendSMS("AFULA-bot has detected a fire! Please respond to its location.");
 }
 
 void reset()
 {
+  sendSMS("Fire appears to be out! AFULA-bot has stopped responding to the fire.");
   sendLogs("INFO: Executing Reset.");
   digitalWrite(BLU_LED, HIGH);
   Serial.println("Resetting....");
@@ -357,29 +388,27 @@ void onFire()
 
 void setup()
 {
+  gsmSerial.begin(9600);
+  Serial.begin(115200);
   Wire.begin();
 
-  // Serial.begin(9600);
-  pinMode(BLU_LED, OUTPUT);
-  pinMode(RED_LED, OUTPUT);
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(D9,OUTPUT);
-  delay(1000);
-  Serial.begin(115200);
   Serial.println();
-
+  
+  delay(1000);
+  initComponents();
   initWifi();
-  delay(2000);
+  delay(1000);
 
   server.on("/command", HTTP_POST, handleCommand);
   server.begin();
   Serial.println();
 }
 
+bool sent = false;
+
 void loop()
 {
   if(!init_done){
-    // sendLogs("INFO: Initializing.");
     digitalWrite(BLU_LED,HIGH);
     Serial.print("Initializing (");
     Serial.print(setupCounter);
@@ -388,7 +417,7 @@ void loop()
     delay(1);
     setupCounter++;
     
-    if(setupCounter<=10000){
+    if(setupCounter<=5000){
       return;
     }
 
@@ -474,7 +503,6 @@ void loop()
   else if (fireDetected && fireExtinguishing)
   {
     sendLogs("INFO: Fighting Fire.");
-    Serial.println("WANG WANG!!");
     blinkLED(1, 100,RED_LED,BLU_LED);
     if (!validateFirewithIR())
     {
