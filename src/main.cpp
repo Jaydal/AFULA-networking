@@ -5,6 +5,9 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <SoftwareSerial.h>
+#include <FireValidator.h>
+#include <Pitches.h>
+#include <MusicPlayer.h>
 
 #define FORWARD 'F'
 #define BACKWARD 'B'
@@ -13,6 +16,10 @@
 #define STOP 'S'
 #define EXTINGUISH 'E'
 #define RESET_MOTOR 'X'
+
+//methods
+#define VALIDATE_FIRE_IR [&]() { return fireValidator.ValidateWithIR(FLM_SENSOR); }()
+#define VALIDATE_FIRE_AI [&]() { return fireValidator.ValidateWithAI(getHttpClient(),testMode); }()
 
 //Settings
 bool testMode = false;
@@ -23,6 +30,7 @@ int commandTimer = 0;
 int commandResetTimer = 100;
 bool init_done = false;
 int setupCounter = 0;
+bool musicMode = false;
 
 //GSM
 String gsmRecipient =  "+639978037903";
@@ -62,8 +70,9 @@ const int FLM_SENSOR = A0;
 
 
 // flame sensor
-const int flameSensorMin = 0;
-const int flameSensorMax = 1024;
+// const int flameSensorMin = 0;
+// const int flameSensorMax = 1024;
+FireValidator fireValidator;
 
 void initComponents()
 {
@@ -186,6 +195,8 @@ void sendMotorCommand(char command)
   if(motorOff){
     return;
   }
+  Serial.print("Motor Command: ");
+  Serial.println(command);
   commandTimer = 0;
   Wire.beginTransmission(9);
   Wire.write(command);
@@ -206,6 +217,9 @@ void handleCommand()
   
   motorOff = (command == "motor_off") ? true : 
                 (command == "motor_on") ? false : motorOff;
+
+  musicMode = (command == "musicmode_off") ? false : 
+              (command == "musicmode_on") ? true : musicMode;
 
   if(manualDriveMode){
     if (command == "forward")
@@ -238,94 +252,6 @@ void handleCommand()
     }
   }
   server.send(200, "text/plain", "Command received: " + command);
-}
-
-bool validateFirewithIR()
-{
-  bool fireDetected = false;
-  int sensorReading = analogRead(FLM_SENSOR);
-  int range = map(sensorReading, flameSensorMin, flameSensorMax, 0, 3);
-
-  switch (range)
-  {
-  case 0:
-    fireDetected = true;
-    break;
-  case 1:
-    fireDetected = true;
-    break;
-  }
-  return fireDetected;
-}
-
-bool predictFireFromImage()
-{
-  sendLogs("INFO: Starting fire detection using Image Processing Service.");
-  Serial.println("Fire Prediction Started...");
-  Serial.print("Server: ");
-  Serial.println(serverUrl_prod);
-
-  bool firePredicted = false;
-
-  HTTPClient http = getHttpClient();
-  int httpCode = http.GET();
-
-  if (httpCode != HTTP_CODE_OK)
-  {
-    Serial.println("Unable to connect!");
-    sendLogs("WARN: Service is not available.");
-    sendLogs("WARN: Unable to connect.");
-    return false;
-  }
-
-  http.addHeader("Content-Type", "application/json");
-
-  String jsonData = "{\"testMode\": " +
-                    String(testMode ? "true" : "false") + "}";
-
-  sendLogs("INFO: Sending HTTP Request.");
-  int httpResponseCode = http.POST(jsonData);
-
-  if (httpResponseCode > 0)
-  {
-    String response = http.getString();
-    Serial.println("HTTP Response code: " + String(httpResponseCode));
-    Serial.println("Response: " + response);
-
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, response);
-
-    if (error)
-    {
-      sendLogs("ERROR: Deserialize failed.");
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(error.f_str());
-      return false;
-    }
-
-    String nasnet = doc["nasnet"];
-    String shufflenet = doc["shufflenet"];
-
-    Serial.println("nasnet model: " + nasnet);
-    Serial.println("shufflenet model: " + shufflenet);
-    sendLogs("- - - Nasnet model: " + nasnet);
-    sendLogs("- - - Shufflenet model: " + shufflenet);
-    sendLogs("INFO: Fire Detection Results:");
-
-    firePredicted = (shufflenet != "1.0" || nasnet != "1.0") ? true : false;
-  }
-  else
-  {
-    sendLogs("ERROR: Error on HTTP request.");
-    Serial.print("Error on HTTP request: ");
-    Serial.println(httpResponseCode);
-    firePredicted = false;
-  }
-
-  http.end();
-  sendLogs("INFO: Terminating HTTP Request.");
-
-  return firePredicted;
 }
 
 void beep(int spk = SPK_1){
@@ -404,15 +330,21 @@ void setup()
   Serial.println();
 }
 
-bool sent = false;
+MusicPlayer music;
 
 void loop()
 {
+  // sendMotorCommand(FORWARD);
+  // sendMotorCommand(EXTINGUISH);
+  // delay(4000);
+  // sendMotorCommand(RESET_MOTOR);
+  // delay(1000);
+  // return;
   if(!init_done){
     digitalWrite(BLU_LED,HIGH);
     Serial.print("Initializing (");
     Serial.print(setupCounter);
-    Serial.println(")");
+    Serial.println(")");  
     server.handleClient();
     delay(1);
     setupCounter++;
@@ -435,6 +367,13 @@ void loop()
     server.handleClient();
   }
 
+  if (musicMode)
+  {
+    music.Play();
+    delay(2000);
+    return;
+  }
+
   if(manualDriveMode){
     commandTimer++;
     Serial.println("Manual mode is on!");
@@ -447,7 +386,6 @@ void loop()
     return;
   }
   else{
-    // Serial.println("Manual mode is off!");
     digitalWrite(RED_LED,LOW);
     digitalWrite(BLU_LED,LOW);
   }
@@ -474,7 +412,7 @@ void loop()
       }
 
       timer++;
-      ctr += validateFirewithIR() ? 1 : 0;
+      ctr += VALIDATE_FIRE_IR ? 1 : 0;
       delay(1);
       if (timer >= resetTimer)
       {
@@ -504,7 +442,7 @@ void loop()
   {
     sendLogs("INFO: Fighting Fire.");
     blinkLED(1, 100,RED_LED,BLU_LED);
-    if (!validateFirewithIR())
+    if (!VALIDATE_FIRE_IR)
     {
       Serial.println("Fire seems out");
       sendLogs("INFO: Fire seems out.");
@@ -528,7 +466,7 @@ void loop()
     do
     {
       Serial.print(".");
-      if (validateFirewithIR())
+      if (VALIDATE_FIRE_IR)
       {
         onFire();
         return;
@@ -538,8 +476,7 @@ void loop()
     } while (ctr <= 50);
 
     Serial.println("Starting fire detection with AI.....");
-
-    fireDetected = predictFireFromImage();
+    fireDetected = VALIDATE_FIRE_AI;
     Serial.println("Prediction: ");
     Serial.print("Fire exists, ");
     Serial.println(fireDetected ? "true" : "false");
