@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../../.."
+		},
+		{
+			"name": "AFULA-Networking",
+			"path": ".."
+		},
+		{
+			"name": "AFULA-driving",
+			"path": "../../../AFULA-driving"
+		}
+	],
+	"settings": {}
+}

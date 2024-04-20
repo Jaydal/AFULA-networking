@@ -8,71 +8,53 @@
 #include <FireValidator.h>
 #include <Pitches.h>
 #include <MusicPlayer.h>
+#include <WifiNetwork.h>
 
-#define FORWARD 'F'
-#define BACKWARD 'B'
-#define RIGHT 'R'
-#define LEFT 'L'
-#define STOP 'S'
-#define EXTINGUISH 'E'
-#define RESET_MOTOR 'X'
+#include <Constants.h>
 
 //methods
 #define VALIDATE_FIRE_IR [&]() { return fireValidator.ValidateWithIR(FLM_SENSOR); }()
 #define VALIDATE_FIRE_AI [&]() { return fireValidator.ValidateWithAI(getHttpClient(),testMode); }()
+#define CONFIG_WIFI_LOCAL []() { wifiNetwork.Config(local_IP,gateway,subnet);}()
+#define CONNECT_WIFI []() { wifiNetwork.Connect(SSID,PASSWORD,SSID_FALLBACK,PASSWORD_FALLBACK);}()
 
-//Settings
-bool testMode = false;
-bool noLogs = true;
-bool motorOff = false;
-bool manualDriveMode = false;
-int commandTimer = 0;
-int commandResetTimer = 100;
+//dynamic vars
 bool init_done = false;
-int setupCounter = 0;
-bool musicMode = false;
+bool fireDetected = false;
+bool fireExtinguishing = false;
+int noFireOccurenceIR = 0;
+String activeServer;
 
-//GSM
-String gsmRecipient =  "+639978037903";
-SoftwareSerial gsmSerial(D5, D6);
+//settings
+bool testMode = TEST_MODE;
+bool noLogs = NO_LOGS;
+bool motorOff = MOTOR_OFF;
+bool manualDriveMode = MANUAL_DRIVE_MODE;
+int commandTimer = COMMAND_TIMER;
+int commandResetTimer = COMMAND_RESET_TIMER;
+int setupCounter = SETUP_COUNTER;
+bool musicMode = MUSIC_MODE;
 
-// Networking
+//networking
+SoftwareSerial gsmSerial(GSM_IO_1, GSM_IO_2);
+WifiNetwork wifiNetwork;
 ESP8266WebServer server(80);
 
 IPAddress local_IP(192, 168, 1, 101);
 IPAddress gateway(192, 168, 1, 1);
 IPAddress subnet(255, 255, 0, 0);
 
-// const char *ssid_prod = "arduino_net";
-// const char *password_prod = "arduino_net";
-// const char *serverUrl_prod = "http://192.168.1.110";//change to 110
+//components
+const int BLU_LED = BLINKER_BLUE_LED;
+const int RED_LED = BLINKER_RED_LED;
+const int SPK_1 = SIREN_SPEAKER;
+const int FLM_SENSOR = FLAME_SENSOR;
 
-const char *ssid = "PLDTHOMEFIBRTx4z7";
-const char *password = "HindiKoAlamE1Ko!";
-const char *serverUrl = "http://192.168.1.216";
-
-const char *ssid_prod = "PLDTHOMEFIBRTx4z7";
-const char *password_prod = "HindiKoAlamE1Ko!";
-const char *serverUrl_prod = "http://192.168.1.216";
-
-String activeServer;
-
-// fire detection
-bool fireDetected = false;
-bool fireExtinguishing = false;
-int noFireOccurenceIR = 0;
-
-// components
-const int BLU_LED = D8;
-const int RED_LED = D7;
-const int SPK_1 = D2;
-const int FLM_SENSOR = A0;
-
-
-// flame sensor
-// const int flameSensorMin = 0;
-// const int flameSensorMax = 1024;
+//fire validation
 FireValidator fireValidator;
+
+//extras
+MusicPlayer music;
 
 void initComponents()
 {
@@ -83,13 +65,13 @@ void initComponents()
 }
 
 void sendSMS(String message){
-  gsmSerial.println("AT+CMGF=1");
+  gsmSerial.println(SMS_MODE);
   delay(1000);
-  gsmSerial.println("AT+CMGS=\""+gsmRecipient+"\"\r"); 
+  gsmSerial.println(SMS_RECIPIENT_COMMAND); 
   delay(1000);
   gsmSerial.print(message);
   delay(1000); 
-  gsmSerial.println((char)26);
+  gsmSerial.println((char)SMS_END);
   Serial.print("Sending message: ");
   Serial.println(message);
   delay(1000); 
@@ -103,7 +85,7 @@ void initWifi()
   }
 
   delay(500);
-  WiFi.begin(ssid_prod, password_prod);
+  WiFi.begin(SSID, PASSWORD);
   delay(500);
 
   Serial.print("Connecting");
@@ -118,7 +100,7 @@ void initWifi()
   Serial.println();
   if (WiFi.status() != WL_CONNECTED)
   {
-    WiFi.begin(ssid, password);
+    WiFi.begin(SSID_FALLBACK, PASSWORD_FALLBACK);
     Serial.print("Failed to connect to primary WIFI, connecting using fallback credentials.");
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -132,7 +114,7 @@ void initWifi()
   Serial.println(WiFi.localIP());
 }
 
-HTTPClient getHttpClient(String url = serverUrl_prod, String fallbackUrl = serverUrl){
+HTTPClient getHttpClient(String url = AI_SERVER, String fallbackUrl = AI_SERVER_FALLBACK){
   HTTPClient http;
   WiFiClient client;
   http.begin(client, url);
@@ -322,7 +304,10 @@ void setup()
   
   delay(1000);
   initComponents();
-  initWifi();
+  // initWifi();
+  CONFIG_WIFI_LOCAL;
+  delay(500);
+  CONNECT_WIFI;
   delay(1000);
 
   server.on("/command", HTTP_POST, handleCommand);
@@ -330,16 +315,8 @@ void setup()
   Serial.println();
 }
 
-MusicPlayer music;
-
 void loop()
 {
-  // sendMotorCommand(FORWARD);
-  // sendMotorCommand(EXTINGUISH);
-  // delay(4000);
-  // sendMotorCommand(RESET_MOTOR);
-  // delay(1000);
-  // return;
   if(!init_done){
     digitalWrite(BLU_LED,HIGH);
     Serial.print("Initializing (");
@@ -369,12 +346,14 @@ void loop()
 
   if (musicMode)
   {
+    reset();
     music.Play();
     delay(2000);
     return;
   }
 
   if(manualDriveMode){
+    reset();
     commandTimer++;
     Serial.println("Manual mode is on!");
     digitalWrite(RED_LED,HIGH);
@@ -448,10 +427,10 @@ void loop()
       sendLogs("INFO: Fire seems out.");
       if (noFireOccurenceIR > 20)
       {
+        reset();
         sendLogs("INFO: Fire is out.");
         Serial.println("Fire is out!");
         blinkLED(1, 2000,BLU_LED);
-        reset();
       }
       noFireOccurenceIR++;
     }
