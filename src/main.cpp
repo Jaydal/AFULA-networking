@@ -8,21 +8,23 @@
 #include <FireValidator.h>
 #include <Pitches.h>
 #include <MusicPlayer.h>
-#include <WifiNetwork.h>
+// #include <WifiNetwork.h>
 
 #include <Constants.h>
 
 //methods
-#define VALIDATE_FIRE_IR [&]() { return fireValidator.ValidateWithIR(FLM_SENSOR); }()
+// #define VALIDATE_FIRE_IR [&]() { return fireValidator.ValidateWithIR(FLM_SENSOR); }()
 #define VALIDATE_FIRE_AI [&]() { return fireValidator.ValidateWithAI(getHttpClient(),testMode); }()
-#define CONFIG_WIFI_LOCAL []() { wifiNetwork.Config(local_IP,gateway,subnet);}()
-#define CONNECT_WIFI []() { wifiNetwork.Connect(SSID,PASSWORD,SSID_FALLBACK,PASSWORD_FALLBACK);}()
+// #define CONFIG_WIFI_LOCAL []() { wifiNetwork.Config(local_IP,gateway,subnet);}()
+// #define CONNECT_WIFI []() { wifiNetwork.Connect(SSID,PASSWORD,SSID_FALLBACK,PASSWORD_FALLBACK);}()
 
 //dynamic vars
 bool init_done = false;
 bool fireDetected = false;
+bool IRValidation = false;
 bool fireExtinguishing = false;
 int noFireOccurenceIR = 0;
+int fireOccurenceIR = 0;
 String activeServer;
 
 //settings
@@ -37,7 +39,7 @@ bool musicMode = MUSIC_MODE;
 
 //networking
 SoftwareSerial gsmSerial(GSM_IO_1, GSM_IO_2);
-WifiNetwork wifiNetwork;
+// WifiNetwork wifiNetwork;
 ESP8266WebServer server(80);
 
 IPAddress local_IP(192, 168, 1, 101);
@@ -46,8 +48,8 @@ IPAddress subnet(255, 255, 0, 0);
 
 //components
 const int BLU_LED = BLINKER_BLUE_LED;
-const int RED_LED = BLINKER_RED_LED;
-const int SPK_1 = SIREN_SPEAKER;
+const int RED_LED = LED_BUILTIN;
+// const int SPK_1 = SIREN_SPEAKER;
 const int FLM_SENSOR = FLAME_SENSOR;
 
 //fire validation
@@ -61,7 +63,7 @@ void initComponents()
   pinMode(BLU_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(SPK_1, OUTPUT);
+  // pinMode(SPK_1, OUTPUT);
 }
 
 void sendSMS(String message){
@@ -172,11 +174,46 @@ void sendLogs(String message)
   }
 }
 
-void sendMotorCommand(char command)
+void executeCommand(char c)
+{
+  // Serial.print("Received Command:");
+  // Serial.println(c);
+
+  if(c==FLAME_IR){
+    Serial.print("Fire Occuring!!!!!");
+    fireOccurenceIR++;
+  }
+  else if(c=='V'){
+    fireOccurenceIR=-3;
+    // Serial.print("Validating");
+  }
+  else if(c=='A'){
+    fireOccurenceIR=-1;
+    // Serial.print("Manuevering...");
+  }
+    else if(c=='Z'){
+    fireOccurenceIR=-2;
+    // Serial.print("Manuevering...");
+  }
+  else if(c=='N'){
+    fireOccurenceIR=0;
+  }
+}
+
+void wireReceiveEvent(){
+    while (Wire.available())
+    {
+        char c = Wire.read();
+        executeCommand(c);
+    }
+}
+
+void sendMDMCommand(char command)
 {
   if(motorOff){
     return;
   }
+
   Serial.print("Motor Command: ");
   Serial.println(command);
   commandTimer = 0;
@@ -206,44 +243,44 @@ void handleCommand()
   if(manualDriveMode){
     if (command == "forward")
     {
-      sendMotorCommand(FORWARD);
+      sendMDMCommand(FORWARD);
     }
     else if (command == "backward")
     {
-      sendMotorCommand(BACKWARD);
+      sendMDMCommand(BACKWARD);
     }
     else if (command == "left")
     {
-      sendMotorCommand(LEFT);
+      sendMDMCommand(LEFT);
     }
     else if (command == "right")
     {
-      sendMotorCommand(RIGHT);
+      sendMDMCommand(RIGHT);
     }
     else if (command == "stop")
     {
-      sendMotorCommand(STOP);
+      sendMDMCommand(STOP);
     }
     else if (command == "extingush")
     {
-      sendMotorCommand(EXTINGUISH);
+      sendMDMCommand(EXTINGUISH);
     }
     else if (command == "reset")
     {
-      sendMotorCommand(RESET_MOTOR);
+      sendMDMCommand(RESET_MOTOR);
     }
   }
   server.send(200, "text/plain", "Command received: " + command);
 }
 
-void beep(int spk = SPK_1){
-   for( int i = 0; i<500;i++){
-      digitalWrite(spk , HIGH);
-      delayMicroseconds(500);
-      digitalWrite(spk, LOW );
-      delayMicroseconds(500);
-   }
-}
+// void beep(int spk = SPK_1){
+//    for( int i = 0; i<500;i++){
+//       digitalWrite(spk , HIGH);
+//       delayMicroseconds(500);
+//       digitalWrite(spk, LOW );
+//       delayMicroseconds(500);
+//    }
+// }
 
 void blinkLED(int freq, int ms, int led = BLU_LED, int led2 = LED_BUILTIN)
 {
@@ -251,11 +288,23 @@ void blinkLED(int freq, int ms, int led = BLU_LED, int led2 = LED_BUILTIN)
   {
     digitalWrite(led, HIGH);
     digitalWrite(led2, HIGH);
-    beep();
+    // beep();
     delay(ms);
     digitalWrite(led, LOW);
     digitalWrite(led2, LOW);
     delay(ms);
+  }
+}
+
+void maneuver()
+{
+  if (fireOccurenceIR == -1)
+  {
+    Serial.println("Maneuvering on the Right");
+  }
+  else if (fireOccurenceIR == -2)
+  {
+    Serial.println("Maneuvering on the Left");
   }
 }
 
@@ -268,19 +317,20 @@ void sendAlert()
 
 void reset()
 {
+  sendMDMCommand(RESET_MOTOR);
   sendSMS("Fire appears to be out! AFULA-bot has stopped responding to the fire.");
   sendLogs("INFO: Executing Reset.");
   digitalWrite(BLU_LED, HIGH);
   Serial.println("Resetting....");
-
-  sendMotorCommand(RESET_MOTOR);
   fireExtinguishing = false;
   fireDetected = false;
   noFireOccurenceIR = 0;
-
+  fireOccurenceIR = 0;
+  
   delay(3000);
   digitalWrite(BLU_LED, LOW);
   sendLogs("INFO: Reset Completed.");
+  delay(10000);
 }
 
 void onFire()
@@ -291,23 +341,39 @@ void onFire()
   Serial.println("Fire Confirmed!!!");
   sendAlert();
   fireExtinguishing = true;
-  sendMotorCommand(EXTINGUISH);
+  fireOccurenceIR = 0;
+  sendMDMCommand(EXTINGUISH);
+  delay(1000);
+}
+
+void getMDMCommand(){
+  Wire.requestFrom(9, 1);
+    if (Wire.available()) {
+        char c = Wire.read();
+        executeCommand(c);
+    }
+  delay(10);
 }
 
 void setup()
 {
+  initComponents();
+  digitalWrite(BLU_LED,HIGH);
+  digitalWrite(RED_LED,HIGH);
+
   gsmSerial.begin(9600);
   Serial.begin(115200);
   Wire.begin();
+  // Wire.begin(9);
+  // Wire.onReceive(wireReceiveEvent);
 
   Serial.println();
   
   delay(1000);
-  initComponents();
-  // initWifi();
-  CONFIG_WIFI_LOCAL;
+  initWifi();
+  // CONFIG_WIFI_LOCAL;
   delay(500);
-  CONNECT_WIFI;
+  // CONNECT_WIFI;
   delay(1000);
 
   server.on("/command", HTTP_POST, handleCommand);
@@ -318,7 +384,6 @@ void setup()
 void loop()
 {
   if(!init_done){
-    digitalWrite(BLU_LED,HIGH);
     Serial.print("Initializing (");
     Serial.print(setupCounter);
     Serial.println(")");  
@@ -326,11 +391,12 @@ void loop()
     delay(1);
     setupCounter++;
     
-    if(setupCounter<=5000){
+    if(setupCounter<=1000){
       return;
     }
 
     digitalWrite(BLU_LED,LOW);
+    digitalWrite(RED_LED,LOW);
     sendLogs("INFO: Setup Initiliazed.");
 
     if(testMode){
@@ -339,17 +405,11 @@ void loop()
 
     }
     init_done = true;
+    sendMDMCommand(STOP);
+    sendMDMCommand('O');
   }
   else{
     server.handleClient();
-  }
-
-  if (musicMode)
-  {
-    reset();
-    music.Play();
-    delay(2000);
-    return;
   }
 
   if(manualDriveMode){
@@ -360,7 +420,7 @@ void loop()
     digitalWrite(BLU_LED,HIGH);
 
     if(commandTimer>=commandResetTimer){
-        sendMotorCommand(STOP);
+        sendMDMCommand(STOP);
     }
     return;
   }
@@ -371,97 +431,133 @@ void loop()
 
   if (fireDetected && !fireExtinguishing)
   {
-    sendLogs("INFO: Image Processing Server detects fire.");
+    // WHEN FIRE IS DETECTED VIA SERVER
+    blinkLED(10, 100);
     Serial.println("Fire Warning!!!");
-    blinkLED(2, 500 ,BLU_LED,RED_LED);
-
+    // sendMDMCommand('W');
+    // delay(3000);
+    
     Serial.println("Validating");
-    sendLogs("INFO: Initializing fire validation using Infrared Sensors.");
-    int ctr = 0;
-    int resetTimer = 20000;
-    int timer = 0;
+    int IRCounter = 0;
+    // do{
+    //   sendMDMCommand(FLAME_IR);
+    //   getMDMCommand();
+    //   blinkLED(1,50);
+    //   if(fireOccurenceIR>0){
+    //     onFire();
+    //     sendMDMCommand('W');
+    //     return;
+    //   }
+    //   else if(fireOccurenceIR<0){
+    //     Serial.println("MDM to maneuver...");
+    //     maneuver();
+    //   }
+    //   else{
+    //     // blinkLED(2,100);
+    //     // delay(100);
+    //     IRCounter++;
+    //   }
+    // }while (IRCounter<=100);
+    sendMDMCommand('O');
+    delay(500);
+    sendMDMCommand('O');
+    delay(500);
+    sendMDMCommand('O');
+    delay(500);
 
-    digitalWrite(RED_LED,HIGH);
-    digitalWrite(BLU_LED,HIGH);
-
-    do
-    {
-      if(timer%500==0 || timer==0){
-        sendMotorCommand(FORWARD);
-      }
-
-      timer++;
-      ctr += VALIDATE_FIRE_IR ? 1 : 0;
-      delay(1);
-      if (timer >= resetTimer)
-      {
-        Serial.println("Sensor did not detect any flames!");
-        sendLogs("INFO: Infrared Sensors did not detect fire.");
-        break;
-      }
-    } while (ctr <= 3);
-
-    sendMotorCommand(STOP);
-
-    if (ctr >= 3)
-    {
-      onFire();
-    }
-    else
-    {
-      digitalWrite(RED_LED,LOW);
-      digitalWrite(BLU_LED,LOW);
-      Serial.println("Fire Not Confirmed!!!");
-      sendLogs("INFO: Infrared Sensors were not able to detect fire.");
-      blinkLED(5, 100,BLU_LED);
-      fireDetected = false;
-    }
-  }
-  else if (fireDetected && fireExtinguishing)
-  {
-    sendLogs("INFO: Fighting Fire.");
-    blinkLED(1, 100,RED_LED,BLU_LED);
-    if (!VALIDATE_FIRE_IR)
-    {
-      Serial.println("Fire seems out");
-      sendLogs("INFO: Fire seems out.");
-      if (noFireOccurenceIR > 20)
-      {
-        reset();
-        sendLogs("INFO: Fire is out.");
-        Serial.println("Fire is out!");
-        blinkLED(1, 2000,BLU_LED);
-      }
-      noFireOccurenceIR++;
-    }
-  }
-  else
-  {
-    blinkLED(3, 1000);
-    Serial.print("Starting fire detection in 5000ms");
-    sendLogs("INFO: Starting fire detection.");
-
-    int ctr = 0;
-    do
-    {
-      Serial.print(".");
-      if (VALIDATE_FIRE_IR)
-      {
+    sendMDMCommand(FLAME_IR_MOTOR);
+    do{
+      // sendMDMCommand(FLAME_IR_MOTOR);
+      getMDMCommand();
+      delay(50);
+      if(fireOccurenceIR>0){
         onFire();
         return;
       }
-      ctr++;
-      delay(100);
-    } while (ctr <= 50);
+      else if(fireOccurenceIR<0){
+        Serial.println("MDM to maneuver...");
+        maneuver();
+      }
+      else{
+        Serial.print("IRCounter: ");
+        Serial.println(IRCounter);
+        IRCounter++;
+      }
+
+    }while(IRCounter<=350);
+    
+    fireDetected = false;
+    sendMDMCommand(STOP);
+    sendMDMCommand('O');
+    delay(100);
+    sendMDMCommand('O');
+    delay(100);
+  }
+  else if (fireDetected && fireExtinguishing)
+  {
+    //WHEN FIRE IS DETECTED AND BEING PUT OUT
+
+    int fireOutCounter = 0;
+    sendMDMCommand(FLAME_IR);
+    do{
+      sendMDMCommand(FLAME_IR);
+      getMDMCommand();
+      blinkLED(1,50);
+      if(fireOccurenceIR>0){
+        fireOutCounter = 0;
+      }
+      else if(fireOccurenceIR<0){
+        Serial.println("MDM to maneuver...");
+        maneuver();
+      }
+      else{
+        fireOutCounter++;
+      }
+
+    }while(fireOutCounter<=1);
+    
+    Serial.println("Fire is out!");
+    reset();
+  }
+  else
+  {
+    //WHEN FIRE IS BEING CHECKED IF EXISTS
+
+    blinkLED(3,1000,LED_BUILTIN);
+    Serial.print("Starting fire detection...");
+    Serial.print("Detecting using IR from Motor Driver Module");
+
+    int IRCounter = 0;
+    do{
+      sendMDMCommand(FLAME_IR);
+      getMDMCommand();
+      delay(50);
+      if(fireOccurenceIR>0){
+        onFire();
+        return;
+      }
+      else if(fireOccurenceIR<0){
+        Serial.println("MDM to maneuver...");
+        maneuver();
+      }
+      else{
+        Serial.print("IRCounter: ");
+        Serial.println(IRCounter);
+        IRCounter++;
+      }
+
+    }while(IRCounter<=250);
+
+    Serial.print("No fire detected using IR.");
+
+    sendMDMCommand('O');
+    blinkLED(5,500,LED_BUILTIN);
+    sendMDMCommand('O');
 
     Serial.println("Starting fire detection with AI.....");
     fireDetected = VALIDATE_FIRE_AI;
     Serial.println("Prediction: ");
     Serial.print("Fire exists, ");
     Serial.println(fireDetected ? "true" : "false");
-    String result = fireDetected ? "Fire Detected.":"No Fire Detected.";
-    String msg = "INFO: Image Processing Result: ";
-    msg+=result;
-    sendLogs(msg);
   }
 }

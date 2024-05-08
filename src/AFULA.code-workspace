@@ -12,5 +12,11 @@
 			"path": "../../../AFULA-driving"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"files.associations": {
+			".fantomasignore": "ignore",
+			"queue": "cpp",
+			"random": "cpp"
+		}
+	}
 }

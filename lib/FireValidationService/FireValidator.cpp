@@ -26,6 +26,10 @@ bool FireValidator::ValidateWithAI(HTTPClient client, bool testMode)
 {
     bool firePredicted = false;
 
+    if(testMode){
+        return true;
+    }
+
     client.addHeader("Content-Type", "application/json");
 
     String jsonData = "{\"testMode\": " +

@@ -17,6 +17,8 @@
 #define STOP 'S'
 #define EXTINGUISH 'E'
 #define RESET_MOTOR 'X'
+#define FLAME_IR 'I'
+#define FLAME_IR_MOTOR 'M'
 
 //gsm
 #define SMS_RECIPIENT "+639065531651"
