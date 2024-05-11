@@ -300,11 +300,11 @@ void maneuver()
 {
   if (fireOccurenceIR == -1)
   {
-    Serial.println("Maneuvering on the Right");
+    Serial.println("Maneuvering on the Left");
   }
   else if (fireOccurenceIR == -2)
   {
-    Serial.println("Maneuvering on the Left");
+    Serial.println("Maneuvering on the Right");
   }
 }
 
@@ -318,6 +318,7 @@ void sendAlert()
 void reset()
 {
   sendMDMCommand(RESET_MOTOR);
+  delay(3000);
   sendSMS("Fire appears to be out! AFULA-bot has stopped responding to the fire.");
   sendLogs("INFO: Executing Reset.");
   digitalWrite(BLU_LED, HIGH);
@@ -330,7 +331,7 @@ void reset()
   delay(3000);
   digitalWrite(BLU_LED, LOW);
   sendLogs("INFO: Reset Completed.");
-  delay(10000);
+  // delay(10000);
 }
 
 void onFire()
@@ -344,6 +345,7 @@ void onFire()
   fireOccurenceIR = 0;
   sendMDMCommand(EXTINGUISH);
   delay(1000);
+  Serial.println("Extinguishing");
 }
 
 void getMDMCommand(){
@@ -511,10 +513,12 @@ void loop()
         maneuver();
       }
       else{
+        Serial.println("Fire seems out...");
         fireOutCounter++;
+        delay(200);
       }
 
-    }while(fireOutCounter<=1);
+    }while(fireOutCounter<=10);
     
     Serial.println("Fire is out!");
     reset();
