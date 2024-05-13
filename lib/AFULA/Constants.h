@@ -35,7 +35,7 @@
 #define AI_SERVER_FALLBACK "http://192.168.1.216"
 
 //settings
-#define TEST_MODE false
+#define TEST_MODE false //this will not send request to the AI Server and will automatically return fire is detected
 #define NO_LOGS true
 #define MOTOR_OFF false
 #define MANUAL_DRIVE_MODE false
@@ -43,5 +43,9 @@
 #define COMMAND_RESET_TIMER 100
 #define SETUP_COUNTER 0
 #define MUSIC_MODE false
+
+#define IR_COUNTER_LIMIT 250 //when IR sensor is being used to detect fire and will stop once the it exceeds the limit, AI detection shall be proceeding
+#define FIRE_OUT_LIMIT 10 //when fire is out during extinguish, it will start resetting once the fire out counter hits the limit 
+#define IR_DRIVE_FORWARD_LIMIT 350 //when AI detected an image and starts driving forward, this limit will determine when will the motos stop
 
 #endif

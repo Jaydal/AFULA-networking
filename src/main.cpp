@@ -8,15 +8,9 @@
 #include <FireValidator.h>
 #include <Pitches.h>
 #include <MusicPlayer.h>
-// #include <WifiNetwork.h>
-
 #include <Constants.h>
 
-//methods
-// #define VALIDATE_FIRE_IR [&]() { return fireValidator.ValidateWithIR(FLM_SENSOR); }()
 #define VALIDATE_FIRE_AI [&]() { return fireValidator.ValidateWithAI(getHttpClient(),testMode); }()
-// #define CONFIG_WIFI_LOCAL []() { wifiNetwork.Config(local_IP,gateway,subnet);}()
-// #define CONNECT_WIFI []() { wifiNetwork.Connect(SSID,PASSWORD,SSID_FALLBACK,PASSWORD_FALLBACK);}()
 
 //dynamic vars
 bool init_done = false;
@@ -39,7 +33,6 @@ bool musicMode = MUSIC_MODE;
 
 //networking
 SoftwareSerial gsmSerial(GSM_IO_1, GSM_IO_2);
-// WifiNetwork wifiNetwork;
 ESP8266WebServer server(80);
 
 IPAddress local_IP(192, 168, 1, 101);
@@ -49,7 +42,6 @@ IPAddress subnet(255, 255, 0, 0);
 //components
 const int BLU_LED = BLINKER_BLUE_LED;
 const int RED_LED = LED_BUILTIN;
-// const int SPK_1 = SIREN_SPEAKER;
 const int FLM_SENSOR = FLAME_SENSOR;
 
 //fire validation
@@ -273,22 +265,12 @@ void handleCommand()
   server.send(200, "text/plain", "Command received: " + command);
 }
 
-// void beep(int spk = SPK_1){
-//    for( int i = 0; i<500;i++){
-//       digitalWrite(spk , HIGH);
-//       delayMicroseconds(500);
-//       digitalWrite(spk, LOW );
-//       delayMicroseconds(500);
-//    }
-// }
-
 void blinkLED(int freq, int ms, int led = BLU_LED, int led2 = LED_BUILTIN)
 {
   for (int i = 0; i < freq; i++)
   {
     digitalWrite(led, HIGH);
     digitalWrite(led2, HIGH);
-    // beep();
     delay(ms);
     digitalWrite(led, LOW);
     digitalWrite(led2, LOW);
@@ -436,40 +418,18 @@ void loop()
     // WHEN FIRE IS DETECTED VIA SERVER
     blinkLED(10, 100);
     Serial.println("Fire Warning!!!");
-    // sendMDMCommand('W');
-    // delay(3000);
-    
     Serial.println("Validating");
+
     int IRCounter = 0;
-    // do{
-    //   sendMDMCommand(FLAME_IR);
-    //   getMDMCommand();
-    //   blinkLED(1,50);
-    //   if(fireOccurenceIR>0){
-    //     onFire();
-    //     sendMDMCommand('W');
-    //     return;
-    //   }
-    //   else if(fireOccurenceIR<0){
-    //     Serial.println("MDM to maneuver...");
-    //     maneuver();
-    //   }
-    //   else{
-    //     // blinkLED(2,100);
-    //     // delay(100);
-    //     IRCounter++;
-    //   }
-    // }while (IRCounter<=100);
     sendMDMCommand('O');
-    delay(500);
+    delay(200);
     sendMDMCommand('O');
-    delay(500);
+    delay(200);
     sendMDMCommand('O');
-    delay(500);
+    delay(200);
 
     sendMDMCommand(FLAME_IR_MOTOR);
     do{
-      // sendMDMCommand(FLAME_IR_MOTOR);
       getMDMCommand();
       delay(50);
       if(fireOccurenceIR>0){
@@ -486,7 +446,7 @@ void loop()
         IRCounter++;
       }
 
-    }while(IRCounter<=350);
+    }while(IRCounter<=IR_DRIVE_FORWARD_LIMIT);
     
     fireDetected = false;
     sendMDMCommand(STOP);
@@ -518,7 +478,7 @@ void loop()
         delay(200);
       }
 
-    }while(fireOutCounter<=10);
+    }while(fireOutCounter<=FIRE_OUT_LIMIT);
     
     Serial.println("Fire is out!");
     reset();
@@ -550,7 +510,7 @@ void loop()
         IRCounter++;
       }
 
-    }while(IRCounter<=250);
+    }while(IRCounter<=IR_COUNTER_LIMIT);
 
     Serial.print("No fire detected using IR.");
 
